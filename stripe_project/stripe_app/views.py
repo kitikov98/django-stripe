@@ -1,56 +1,38 @@
-from django.http import JsonResponse, HttpResponse
-from django.shortcuts import get_object_or_404
-from django.urls import reverse
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from django.shortcuts import get_object_or_404, render
+from .models import Item
+from .serializers import ItemSerializer
 import stripe
 
-from .models import Item
+class ItemView(APIView):
+    def get(self, request, item_id):
+        item = get_object_or_404(Item, id=item_id)
+        return render(request, 'item.html', {'item': item})
 
-stripe.api_key = 'sk_test_51OPPPdEaLvOkTk91fd6AfYfzmgTVuPFu31bwletF6o4gWTTAibxxmXsEHbntPE6cdRK3LyrZtmpf6uQSw1fUqbmf00CENRt9Lx'
+class BuyView(APIView):
+    def get(self, request, item_id):
+        item = get_object_or_404(Item, id=item_id)
 
-def get_buy_session(request, id):
-    item = get_object_or_404(Item, id=id)
-    session = stripe.checkout.Session.create(
-        payment_method_types=['card'],
-        line_items=[{
-            'price_data': {
-                'currency': 'usd',
-                'product_data': {
-                    'name': item.name,
-                },
-                'unit_amount_decimal': int(item.price * 100),
-            },
-            'quantity': 1,
-        }],
-        mode='payment',
-        success_url=request.build_absolute_uri(reverse('item', args=[id])),
-        cancel_url=request.build_absolute_uri(reverse('item', args=[id])),
-    )
-    return JsonResponse({'session_id': session.id})
-
-def get_item_page(request, id):
-    item = get_object_or_404(Item, id=id)
-    html = f"""
-        <h1>{item.name}</h1>
-        <p>{item.description}</p>
-        <button onclick="redirectToCheckout({id})">Buy</button>
-        <script src="https://js.stripe.com/v3/"></script>
-        <script>
-            function redirectToCheckout(itemId) {{
-                fetch('/buy/'+itemId)
-                    .then(function(response) {{
-                        return response.json();
-                    }})
-                    .then(function(data) {{
-                        var stripe = Stripe('your_stripe_publishable_key');
-                        stripe.redirectToCheckout({{
-                            sessionId: data.session_id
-                        }});
-                    }})
-                    .catch(function(error) {{
-                        console.error('Error:', error);
-                    }});
-            }}
-        </script>
-    """
-    return HttpResponse(html)
+        stripe.api_key = 'sk_test_51OPPPdEaLvOkTk91fd6AfYfzmgTVuPFu31bwletF6o4gWTTAibxxmXsEHbntPE6cdRK3LyrZtmpf6uQSw1fUqbmf00CENRt9Lx'
+        try:
+            product = stripe.Product.create(name=item.name, description=item.description)
+            price = stripe.Price.create(
+                unit_amount=int(item.price * 100),  # Stripe работает с ценами в центах
+                currency='usd',
+                product=product.id,
+            )
+            session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=[{
+                    'price': price.id,
+                    'quantity': 1,
+                }],
+                mode='payment',
+                success_url='https://example.com/success?session_id={CHECKOUT_SESSION_ID}',
+                cancel_url='https://example.com/cancel',
+            )
+            return Response({'session_id': session.id})
+        except stripe.error.StripeError as e:
+            return Response({'error': str(e)}, status=400)
 
